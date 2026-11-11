@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>照片粒子 · Particle Portrait</title>
+<style>
+  :root{ --ink:#e9dfc9; --dim:#8d8272; --seal:#b23a2e; --gold:#c9a86a; }
+  html,body{margin:0;height:100%;overflow:hidden;background:#07070a;color:var(--ink);
+    font-family:"STKaiti","KaiTi","Kaiti SC","Songti SC","SimSun",-apple-system,"Microsoft YaHei",serif;
+    -webkit-tap-highlight-color:transparent}
+
+  /* 水墨背景层：在粒子层下面，由 WebGL 透明画布透出来 */
+  #scenery{position:fixed;inset:0;width:100%;height:100%;z-index:0;display:block;pointer-events:none}
+
+  canvas{position:fixed;inset:0;display:block;width:100%;height:100%;touch-action:none;z-index:1}
+
+  /* ---------- 上传提示 ---------- */
+  #tip{position:fixed;inset:0;z-index:20;display:grid;place-items:center;cursor:pointer;
+    text-align:center;padding:0 24px;letter-spacing:.1em;color:var(--dim);
+    background:radial-gradient(circle at 50% 46%,rgba(196,148,86,.10),rgba(7,7,10,0) 62%);
+    transition:opacity .7s ease}
+  #tip.gone{opacity:0;pointer-events:none}
+  #tip .big{display:block;font-size:22px;color:#e6d9bd;letter-spacing:.46em;text-indent:.46em;margin-bottom:4px}
+  #tip .small{display:block;font-size:12px;opacity:.5;margin-top:16px;letter-spacing:.12em;line-height:2}
+
+  #file{display:none}
+
+  /* ---------- 标题 ---------- */
+  #title{position:fixed;left:0;right:0;bottom:7%;z-index:15;text-align:center;
+    font-size:clamp(20px,5vw,34px);letter-spacing:.34em;text-indent:.34em;color:#f4e9d2;
+    opacity:0;transform:translateY(12px);pointer-events:none;
+    text-shadow:0 0 22px rgba(255,206,140,.5),0 0 66px rgba(198,132,58,.32);
+    transition:opacity 1.5s ease,transform 1.5s ease}
+  #title.show{opacity:1;transform:translateY(0)}
+
+  /* ---------- 印章 ---------- */
+  #seal{position:fixed;right:30px;bottom:26px;z-index:16;writing-mode:vertical-rl;
+    padding:8px 6px;border:1.5px solid rgba(198,74,58,.75);border-radius:2px;
+    color:#e9c7ad;font-size:13px;letter-spacing:.3em;background:rgba(150,44,32,.24);
+    opacity:0;transition:opacity 1.8s ease .5s;pointer-events:none}
+  #seal.show{opacity:.9}
+
+  /* ---------- 设置 ---------- */
+  #gear{position:fixed;top:14px;right:14px;z-index:30;width:38px;height:38px;
+    border-radius:10px;border:1px solid rgba(201,168,106,.26);background:rgba(20,16,13,.6);
+    color:#d8b88a;font-size:15px;cursor:pointer;display:grid;place-items:center;
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);transition:.2s}
+  #gear:hover{background:rgba(52,30,22,.9);color:#f6e9d2}
+
+  #panel{position:fixed;top:60px;right:14px;z-index:30;width:240px;padding:14px 14px 6px;
+    border-radius:14px;border:1px solid rgba(201,168,106,.18);background:rgba(16,13,11,.86);
+    -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+    box-shadow:0 20px 60px rgba(0,0,0,.72);transform-origin:top right;
+    transition:opacity .25s ease,transform .25s ease}
+  #panel.hidden{opacity:0;transform:scale(.94) translateY(-6px);pointer-events:none}
+  .row{display:flex;align-items:center;gap:10px;font-size:12px;color:#b6a88e;
+    margin-bottom:13px;letter-spacing:.05em}
+  .row>span{width:58px;flex:none;white-space:nowrap}
+  .row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:3px;
+    border-radius:3px;background:linear-gradient(90deg,#8a3a2b,#c9a86a);outline:none}
+  .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;
+    border-radius:50%;background:#f2e6cd;box-shadow:0 0 10px rgba(201,168,106,.85);cursor:pointer}
+  .row input[type=range]::-moz-range-thumb{width:13px;height:13px;border:0;border-radius:50%;
+    background:#f2e6cd;box-shadow:0 0 10px rgba(201,168,106,.85);cursor:pointer}
+  .row .chk{display:flex;align-items:center;gap:8px;cursor:pointer}
+  #btnPick{width:100%;padding:9px;margin-bottom:12px;border-radius:8px;cursor:pointer;
+    border:1px solid rgba(201,168,106,.28);color:#e9dcc2;font-size:12px;letter-spacing:.2em;
+    background:linear-gradient(180deg,rgba(140,58,43,.42),rgba(76,30,22,.28))}
+  #btnPick:hover{background:rgba(150,62,46,.52)}
+
+  #hint{position:fixed;left:16px;bottom:14px;z-index:15;font-size:11px;letter-spacing:.14em;
+    color:rgba(214,198,166,.42);pointer-events:none;opacity:0;
+    transition:opacity 1s ease}
+  #hint.show{opacity:1}
+  #loading{position:fixed;inset:0;z-index:40;display:grid;place-items:center;opacity:0;
+    pointer-events:none;font-size:12px;letter-spacing:.4em;color:#c9b48a;transition:opacity .3s}
+  #loading.on{opacity:1}
+</style>
+</head>
+<body>
+
+<!-- 水墨背景：月色 · 远山 · 云气 · 宣纸纹 -->
+<svg id="scenery" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#08080c"/>
+      <stop offset="0.45" stop-color="#12100e"/>
+      <stop offset="0.78" stop-color="#181310"/>
+      <stop offset="1"    stop-color="#0b0a09"/>
+    </linearGradient>
+    <radialGradient id="moonHalo">
+      <stop offset="0"    stop-color="#ffe9bf" stop-opacity="0.28"/>
+      <stop offset="0.35" stop-color="#e6c086" stop-opacity="0.09"/>
+      <stop offset="1"    stop-color="#e6c086" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="moonDisc" cx="0.38" cy="0.34" r="0.72">
+      <stop offset="0"    stop-color="#fffaf0"/>
+      <stop offset="0.62" stop-color="#f7ecd4"/>
+      <stop offset="1"    stop-color="#e6d0a4" stop-opacity="0.8"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="600" fill="url(#sky)"/>
+
+  <circle cx="800" cy="126" r="200" fill="url(#moonHalo)"/>
+  <circle cx="800" cy="126" r="44"  fill="url(#moonDisc)" opacity="0.94"/>
+
+  <!-- 远山三重，越远越淡越虚 -->
+  <path filter="url(#soft)" fill="rgba(150,144,136,0.10)"
+        d="M0,470 C120,432 196,458 300,424 C404,390 466,444 566,410 C666,376 726,432 830,398 C904,374 952,412 1000,396 L1000,600 L0,600 Z"/>
+  <path filter="url(#soft)" fill="rgba(96,92,88,0.20)"
+        d="M0,506 C96,472 176,502 268,468 C366,432 424,492 528,458 C632,424 700,488 806,458 C892,434 950,472 1000,452 L1000,600 L0,600 Z"/>
+  <path fill="rgba(24,21,20,0.70)"
+        d="M0,556 C118,522 206,554 318,526 C430,498 502,560 622,536 C742,512 822,558 922,540 L1000,552 L1000,600 L0,600 Z"/>
+
+  <!-- 云气 -->
+  <ellipse cx="300" cy="520" rx="330" ry="44" fill="rgba(226,214,190,0.05)" filter="url(#soft)"/>
+  <ellipse cx="764" cy="552" rx="300" ry="38" fill="rgba(226,214,190,0.045)" filter="url(#soft)"/>
+
+  <!-- 宣纸纹 -->
+  <rect width="1000" height="600" filter="url(#grain)" opacity="0.05"/>
+</svg>
+
+<div id="tip">
+  <div>
+    <span class="big">择一张照片</span>
+    <span class="small">也可将图片直接拖入此间<br>宜选主体分明、背景素净的画像</span>
+  </div>
+</div>
+<input id="file" type="file" accept="image/*">
+<div id="title">生辰快乐</div>
+<div id="seal">岁岁平安</div>
+<div id="hint">轻曳旋转 · 滚轮远近 · 双击换图</div>
+<div id="loading">研墨铺陈…</div>
+
+<button id="gear" title="效果设置">✦</button>
+<div id="panel" class="hidden">
+  <div class="row"><span>细节密度</span><input id="cDetail" type="range" min="140" max="460" step="20"></div>
+  <div class="row"><span>扣背景</span><input id="cBg" type="range" min="0" max="200" step="5"></div>
+  <div class="row"><span>粒子大小</span><input id="cSize" type="range" min="50" max="220" step="5"></div>
+  <div class="row"><span>光晕强度</span><input id="cBloom" type="range" min="0" max="160" step="5"></div>
+  <div class="row"><label class="chk"><input id="cRotate" type="checkbox"> 自动旋转</label></div>
+  <button id="btnPick">换一张照片</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ============================================================
+   ★ ★ ★   调  参  区   ★ ★ ★
+   想改效果只动这里的数字，改完保存 → 刷新页面即可。
+   每条后面的注释写了「调大/调小会怎样」。
+   ============================================================ */
+const CONFIG = {
+
+  /* ---------- 1. 画质：决定「能不能看出是照片」 ---------- */
+  detail:         520,     // 采样长边像素：300 略糊但快 / 380 清晰 / 520 很细但吃性能
+  maxParticles:   140000,  // 粒子上限。前景像素超过它会随机抽稀，抽稀会出空洞
+
+  /* ---------- 2. 粒子外观 ---------- */
+  size:           2.00,    // 粒子大小倍率（设置面板的滑杆也是改这个）
+  dotSize:        2.00,    // 直径 = 网格间距 × 该值：1.2 稀疏颗粒感 / 2.0 照片感 / 2.8 糊
+  dotJitter:      0.40,    // 直径随机浮动，避免整齐得像印刷网点
+  darkLift:       0.24,    // ★暗部提亮：0 = 纯照片色（黑色区域几乎看不见）/ 0.24 推荐
+  brightness:     1.10,    // 整体亮度
+  saturation:     1.15,    // 饱和度（1 = 原色）
+  gamma:          0.92,    // <1 提亮中间调
+
+  /* ---------- 3. 抠背景 ---------- */
+  bgCut:          1.50,    // 抠背景强度：0 = 保留整张照片 / 1 默认 / 1.5 抠得更狠
+  bgBase:         18,      // 基础颜色容差
+  bgSpread:       2.10,    // 背景越花，容差放得越宽
+
+  /* ---------- 4. 光晕 ---------- */
+  bloom:          0.42,    // 光晕强度：0 关闭 / 0.4 柔和 / 0.9 梦幻
+  bloomRadius:    0.50,    // 光晕扩散半径
+  bloomThreshold: 0.78,    // 超过这个亮度才发光（调低 = 整片都在发光，容易糊）
+
+  /* ---------- 5. 取景 ---------- */
+  fitMargin:      1.22,    // 照片占屏比例：1 = 贴边 / 1.22 古风留白 / 1.4 更小
+
+  /* ---------- 6. 深度（让照片有点立体，调大会变形） ---------- */
+  depthLum:       0.26,    // 亮像素往前凸
+  depthCurve:     0.12,    // 中间往前鼓一点
+  depthJitter:    0.03,    // 深度随机抖动
+
+  /* ---------- 7. 动效 ---------- */
+  gatherSpan:     0.85,    // 由中心向外依次出场的总时长（秒）
+  gatherRand:     0.30,    // 每颗粒子的随机延迟
+  flyFrom:        2.6,     // 飞入起点球壳半径（下限）
+  flyTo:          6.0,     // 飞入起点球壳半径（上限）
+  spring:         16,      // 弹簧刚度：越大回位越快越硬
+  springRand:     8,       // 刚度随机浮动
+  damping:        6.2,     // 阻尼：越大越不抖
+  drift:          0.0045,  // 呼吸漂移幅度
+  repelRadius:    0.62,    // 鼠标推开粒子的半径
+  repelForce:     34,      // 推开力度
+
+  /* ---------- 8. 场景 ---------- */
+  background:     0x0a0908, // 背景色（画布已透明，露出水墨层，通常不用改）
+  glowOpacity:    0.34,     // 画面中心暖光
+  stars:          240,      // 背景星点数量
+  warmth:         0.60,     // 古风暖调：暗部提亮时偏暖，0 = 中性 / 1 = 很暖
+  autoRotate:     false,    // 自动旋转（侧过去就看不清照片了，默认关）
+  title:          '生辰快乐' // 底部文字（想换回英文改这里）
+};
+const cfg = CONFIG;   // 下文统一用 cfg.xxx 引用
+
+/* 移动端/小屏自动降配（只在这里覆盖；改上面 CONFIG 桌面端不受影响） */
+const COARSE = matchMedia('(pointer:coarse)').matches;
+const SMALL  = Math.min(innerWidth, innerHeight) < 700;
+if (SMALL) {
+  cfg.detail = 260;
+  cfg.maxParticles = 50000;
+  cfg.bloom = 0.35;
+}
+const MAX_PARTICLES = cfg.maxParticles;
+
+/* ============================================================
+   2. 场景 / 渲染器 / 后期
+   ============================================================ */
+/* ============================================================
+   1.5 水墨背景：把山水直接画成贴图当场景背景
+   （不再依赖透明画布 —— 后处理会把 alpha 写实，透明层会被吃掉）
+   ============================================================ */
+function makeInkBackdrop() {
+  const W = Math.max(2, Math.round(innerWidth * 0.75));
+  const H = Math.max(2, Math.round(innerHeight * 0.75));
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+
+  /* —— 夜空 —— */
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0.00, '#08080d');
+  sky.addColorStop(0.42, '#13110e');
+  sky.addColorStop(0.72, '#1b1512');
+  sky.addColorStop(1.00, '#0c0a09');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, H);
+
+  /* —— 月 —— */
+  const mx = W * 0.80, my = H * 0.21, mr = Math.min(W, H) * 0.072;
+  let rg = g.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 7);
+  rg.addColorStop(0.00, 'rgba(255,232,186,0.34)');
+  rg.addColorStop(0.30, 'rgba(226,186,126,0.12)');
+  rg.addColorStop(1.00, 'rgba(226,186,126,0)');
+  g.fillStyle = rg;
+  g.fillRect(0, 0, W, H);
+
+  rg = g.createRadialGradient(mx - mr * 0.3, my - mr * 0.3, mr * 0.1, mx, my, mr);
+  rg.addColorStop(0.00, 'rgba(255,250,238,0.98)');
+  rg.addColorStop(0.66, 'rgba(247,236,212,0.92)');
+  rg.addColorStop(1.00, 'rgba(232,212,168,0.55)');
+  g.fillStyle = rg;
+  g.beginPath(); g.arc(mx, my, mr, 0, Math.PI * 2); g.fill();
+
+  /* —— 远山：越远越淡越虚 —— */
+  const ridge = (baseY, amp, color, blur, segs) => {
+    g.save();
+    g.filter = blur ? `blur(${blur}px)` : 'none';
+    g.beginPath();
+    g.moveTo(0, H);
+    g.lineTo(0, H * baseY);
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs;
+      const y = H * (baseY - amp * (0.30 + 0.70 * Math.abs(Math.sin(i * 1.9 + baseY * 23))));
+      g.lineTo(W * t, y);
+    }
+    g.lineTo(W, H);
+    g.closePath();
+    g.fillStyle = color;
+    g.fill();
+    g.restore();
+  };
+  ridge(0.72, 0.090, 'rgba(158,150,140,0.16)', 9, 11);
+  ridge(0.78, 0.080, 'rgba(108,102,96,0.28)',  6, 13);
+  ridge(0.85, 0.070, 'rgba(30,26,24,0.80)',    0, 15);
+  ridge(0.93, 0.050, 'rgba(14,13,12,0.90)',    0, 17);
+
+  /* —— 云气 —— */
+  g.filter = 'blur(26px)';
+  g.fillStyle = 'rgba(226,214,190,0.055)';
+  g.beginPath(); g.ellipse(W * 0.30, H * 0.88, W * 0.34, H * 0.05, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(226,214,190,0.045)';
+  g.beginPath(); g.ellipse(W * 0.76, H * 0.94, W * 0.30, H * 0.04, 0, 0, Math.PI * 2); g.fill();
+  g.filter = 'none';
+
+  /* —— 宣纸颗粒 —— */
+  g.globalAlpha = 0.05;
+  for (let i = 0; i < 2400; i++) {
+    g.fillStyle = Math.random() < 0.5 ? '#000' : '#fff';
+    g.fillRect(Math.random() * W, Math.random() * H, 1, 1);
+  }
+  g.globalAlpha = 1;
+
+  /* —— 四周压暗 —— */
+  const vig = g.createRadialGradient(W * 0.5, H * 0.48, Math.min(W, H) * 0.22,
+                                     W * 0.5, H * 0.50, Math.max(W, H) * 0.72);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.42)');
+  g.fillStyle = vig;
+  g.fillRect(0, 0, W, H);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+
+const scene = new THREE.Scene();
+scene.background = makeInkBackdrop();   // 水墨山水铺底
+
+const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 0, 4.2);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const PIXEL_RATIO = Math.min(window.devicePixelRatio || 1, SMALL ? 1.75 : 2);
+renderer.setPixelRatio(PIXEL_RATIO);
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(cfg.background, 1);
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.enablePan = false;
+controls.minDistance = 1.1;
+controls.maxDistance = 16;
+controls.rotateSpeed = 0.55;
+controls.zoomSpeed = 0.7;
+controls.autoRotateSpeed = 0.6;
+controls.autoRotate = cfg.autoRotate;
+
+const composer = new EffectComposer(renderer);
+if (typeof composer.setPixelRatio === 'function') composer.setPixelRatio(PIXEL_RATIO);
+composer.setSize(innerWidth, innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  cfg.bloom,           // strength  光晕强度
+  cfg.bloomRadius,     // radius    扩散半径
+  cfg.bloomThreshold   // threshold 发光阈值
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+/* 背后的柔光（让画面不空，同时给粒子一点环境光感） */
+(function addGlow() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0.00, 'rgba(255,216,150,0.40)');
+  grd.addColorStop(0.35, 'rgba(206,146,86,0.16)');
+  grd.addColorStop(0.70, 'rgba(112,66,38,0.05)');
+  grd.addColorStop(1.00, 'rgba(0,0,0,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 128, 128);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, opacity: cfg.glowOpacity
+  }));
+  sprite.scale.set(16, 16, 1);
+  sprite.position.set(0, 0, -7);
+  scene.add(sprite);
+  window.__glowSprite = sprite;
+})();
+
+/* ============================================================
+   3. 粒子材质（圆形软粒子 + 单个粒子淡入 + 微闪）
+   ============================================================ */
+const VERT = `
+attribute vec3  aColor;
+attribute float aSize;
+attribute float aDelay;
+attribute float aSeed;
+attribute float aAlpha;
+
+uniform float uTime;
+uniform float uPixelScale;
+uniform float uSize;
+uniform float uFade;
+
+varying vec3  vColor;
+varying float vAlpha;
+
+void main() {
+  vColor = aColor;
+
+  /* 每颗粒子按 delay 依次点亮 */
+  float t = uTime - aDelay;
+  float reveal = clamp(t / 0.6, 0.0, 1.0);
+  reveal = reveal * reveal * (3.0 - 2.0 * reveal);
+
+  /* 极轻微的呼吸闪烁，让画面活着 */
+  float spark = 0.88 + 0.12 * sin(uTime * 1.6 + aSeed * 6.2831853);
+  vAlpha = aAlpha * reveal * uFade;
+
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  float ps = aSize * uSize * spark * uPixelScale / max(-mv.z, 0.05);
+  gl_PointSize = clamp(ps, 1.0, 48.0);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const FRAG = `
+varying vec3  vColor;
+varying float vAlpha;
+
+void main() {
+  vec2 q = gl_PointCoord - 0.5;
+  float d = length(q) * 2.0;
+  if (d > 1.0 || vAlpha < 0.002) discard;
+
+  /* 中心亮、边缘柔和 —— 配合 bloom 会自然发亮 */
+  float a = 1.0 - smoothstep(0.30, 1.0, d);
+  a = a * a;
+
+  vec3 c = vColor * (0.80 + 0.60 * (1.0 - d));
+  gl_FragColor = vec4(c * a * vAlpha, a * vAlpha);
+}
+`;
+
+function makeParticleMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:       { value: 0 },
+      uPixelScale: { value: 1000 },
+      uSize:       { value: 1 },
+      uFade:       { value: 1 }
+    },
+    vertexShader: VERT,
+    fragmentShader: FRAG,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendSrcAlpha: THREE.OneFactor,
+    blendDstAlpha: THREE.OneMinusSrcAlphaFactor
+  });
+}
+
+/* ============================================================
+   4. 工具函数
+   ============================================================ */
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const srgb2lin = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+
+/* 加权 RGB 距离（redmean），比欧氏距离更贴近人眼 */
+function cdist(r1, g1, b1, r2, g2, b2) {
+  const rm = (r1 + r2) * 0.5;
+  const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+  return Math.sqrt((2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db);
+}
+
+/* 把任意尺寸的图缩到采样网格上 */
+function rasterize(img, longSide) {
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const aspect = w / h;
+  let cols, rows;
+  if (aspect >= 1) { cols = Math.round(longSide); rows = Math.max(4, Math.round(longSide / aspect)); }
+  else             { rows = Math.round(longSide); cols = Math.max(4, Math.round(longSide * aspect)); }
+
+  const cv = document.createElement('canvas');
+  cv.width = cols; cv.height = rows;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.clearRect(0, 0, cols, rows);
+  g.drawImage(img, 0, 0, cols, rows);
+  const data = g.getImageData(0, 0, cols, rows).data;
+  return { cols, rows, data, aspect };
+}
+
+/* 从四边洪水填充抠背景：只有和边框连通的背景色才会被删掉，
+   所以主体内部的深色（头发、衣服）不会被吃掉。 */
+function detectBackground(data, cols, rows, cut) {
+  if (cut <= 0.02) return null;
+
+  const border = [];
+  let sr = 0, sg = 0, sb = 0, sn = 0;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (x !== 0 && y !== 0 && x !== cols - 1 && y !== rows - 1) continue;
+      const i = (y * cols + x) * 4;
+      if (data[i + 3] < 32) continue;
+      border.push(i);
+      sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; sn++;
+    }
+  }
+  if (sn < 8) return null;
+
+  const mr = sr / sn, mg = sg / sn, mb = sb / sn;
+  let spread = 0;
+  for (let k = 0; k < border.length; k++) {
+    const i = border[k];
+    spread += cdist(data[i], data[i + 1], data[i + 2], mr, mg, mb);
+  }
+  spread /= border.length;
+
+  const tol = Math.min(105, Math.max(16, cfg.bgBase + spread * cfg.bgSpread)) * cut;
+  const localTol = tol * 0.5;
+
+  const n = cols * rows;
+  const mask = new Uint8Array(n);       // 1 = 背景
+  const queue = new Int32Array(n);
+  let head = 0, tail = 0;
+
+  for (let k = 0; k < border.length; k++) {
+    const i = border[k];
+    if (cdist(data[i], data[i + 1], data[i + 2], mr, mg, mb) < tol) {
+      const p = i >> 2;
+      if (!mask[p]) { mask[p] = 1; queue[tail++] = p; }
+    }
+  }
+
+  while (head < tail) {
+    const p = queue[head++];
+    const x = p % cols;
+    const y = (p - x) / cols;
+    const i = p * 4;
+    const cr = data[i], cg = data[i + 1], cb = data[i + 2];
+
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? -1 : k === 1 ? 1 : 0);
+      const ny = y + (k === 2 ? -1 : k === 3 ? 1 : 0);
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+      const q = ny * cols + nx;
+      if (mask[q]) continue;
+
+      const j = q * 4;
+      const jd = cdist(data[j], data[j + 1], data[j + 2], mr, mg, mb);
+      const ld = cdist(data[j], data[j + 1], data[j + 2], cr, cg, cb);
+      if (jd < tol || (ld < localTol && jd < tol * 2.1)) {
+        mask[q] = 1;
+        queue[tail++] = q;
+      }
+    }
+  }
+  return mask;
+}
+
+/* Sobel 边缘：边缘处粒子更小，主体轮廓更利落 */
+function edgeMap(data, cols, rows) {
+  const n = cols * rows;
+  const lum = new Float32Array(n);
+  for (let p = 0; p < n; p++) {
+    const i = p * 4;
+    lum[p] = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
+  }
+  const e = new Float32Array(n);
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      const p = y * cols + x;
+      const gx = -lum[p - cols - 1] - 2 * lum[p - 1] - lum[p + cols - 1]
+               +  lum[p - cols + 1] + 2 * lum[p + 1] + lum[p + cols + 1];
+      const gy = -lum[p - cols - 1] - 2 * lum[p - cols] - lum[p - cols + 1]
+               +  lum[p + cols - 1] + 2 * lum[p + cols] + lum[p + cols + 1];
+      e[p] = Math.min(1, Math.hypot(gx, gy) * 0.7);
+    }
+  }
+  return e;
+}
+
+/* ============================================================
+   5. 世界状态
+   ============================================================ */
+let particleMaterial = null;
+let starMaterial = null;
+let starPoints = null;
+
+const world = {
+  points: null, geo: null, posAttr: null,
+  count: 0,
+  pos: null, vel: null, home: null, stiff: null, seeds: null, delay: null
+};
+
+let lastImage = null;
+let buildStart = 0;         // performance.now()，用于 uTime
+let fitW = 2, fitH = 2;     // 当前照片的世界尺寸
+let hasBuilt = false;
+
+/* ============================================================
+   6. 由照片生成粒子
+   ============================================================ */
+function buildFromImage(img, keepView) {
+  const ras = rasterize(img, Math.round(cfg.detail));
+  const { cols, rows, data, aspect } = ras;
+
+  const mask  = detectBackground(data, cols, rows, cfg.bgCut);
+  const edges = edgeMap(data, cols, rows);
+
+  const physW = aspect >= 1 ? 2 : 2 * aspect;
+  const physH = aspect >= 1 ? 2 / aspect : 2;
+  const cell = (physW / cols + physH / rows) * 0.5;
+
+  fitW = physW; fitH = physH;
+
+  /* —— 第一遍：数一下前景像素，决定要不要抽稀 —— */
+  const n = cols * rows;
+  let fg = 0;
+  for (let p = 0; p < n; p++) {
+    const i = p * 4;
+    if (data[i + 3] < 40) continue;
+    if (mask && mask[p]) continue;
+    fg++;
+  }
+  if (fg < 20) { toast('这张图没找到主体，把「扣背景」往左拉一点'); return; }
+  const keepProb = fg > MAX_PARTICLES ? MAX_PARTICLES / fg : 1;
+
+  /* —— 第二遍：真正生成 —— */
+  let cap = fg + 1;
+  const home  = new Float32Array(cap * 3);
+  const color = new Float32Array(cap * 3);
+  const size  = new Float32Array(cap);
+  const delay = new Float32Array(cap);
+  const seed  = new Float32Array(cap);
+  const alpha = new Float32Array(cap);
+
+  let count = 0;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const p = y * cols + x;
+      const i = p * 4;
+      if (data[i + 3] < 40) continue;
+      if (mask && mask[p]) continue;
+
+      const edge = edges[p];
+      if (keepProb < 1 && edge < 0.18 && Math.random() > keepProb) continue;
+
+      /* --- 颜色：提饱和 + 提亮暗部 + 整体提亮，保证每颗粒子都看得见 --- */
+      let r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+      const lum0 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const sat = cfg.saturation;
+      r = clamp01(lum0 + (r - lum0) * sat);
+      g = clamp01(lum0 + (g - lum0) * sat);
+      b = clamp01(lum0 + (b - lum0) * sat);
+      r = Math.pow(r, cfg.gamma);
+      g = Math.pow(g, cfg.gamma);
+      b = Math.pow(b, cfg.gamma);
+
+      /* 暗部抬升：向暖白靠，纯黑区域也留得下粒子（warmth 越大越像旧绢本） */
+      const wm = cfg.warmth, lift = cfg.darkLift, br = cfg.brightness;
+      const lr = lift * (1 + 0.10 * wm), lg = lift * (1 - 0.02 * wm), lb = lift * (1 - 0.26 * wm);
+      r = clamp01((lr + r * (1 - lr)) * br);
+      g = clamp01((lg + g * (1 - lg)) * br);
+      b = clamp01((lb + b * (1 - lb)) * br);
+
+      /* --- 位置：像素中心 + 少量抖动，避免网格感 --- */
+      const u = (x + 0.5 + (Math.random() - 0.5) * 0.8) / cols;
+      const v = (y + 0.5 + (Math.random() - 0.5) * 0.8) / rows;
+      const nx = (u - 0.5) * physW;
+      const ny = (0.5 - v) * physH;
+
+      /* --- 深度：亮度抬升 + 球面微鼓 + 边缘前移 --- */
+      const rr = Math.min(1, (u - 0.5) * (u - 0.5) * 4 + (v - 0.5) * (v - 0.5) * 4);
+      const nz = (lum0 - 0.5) * cfg.depthLum + (1 - rr) * cfg.depthCurve + edge * 0.05
+               + (Math.random() - 0.5) * cfg.depthJitter;
+
+      /* --- 由内向外依次点亮 --- */
+      const rn = Math.min(1, Math.hypot((u - 0.5) * 2, (v - 0.5) * 2) * 0.7071);
+
+      const c3 = count * 3;
+      home[c3] = nx; home[c3 + 1] = ny; home[c3 + 2] = nz;
+      color[c3] = srgb2lin(r); color[c3 + 1] = srgb2lin(g); color[c3 + 2] = srgb2lin(b);
+
+      size[count]  = cell * (cfg.dotSize + Math.random() * cfg.dotJitter) * (1 - 0.16 * edge);
+      delay[count] = 0.10 + rn * cfg.gatherSpan + Math.random() * cfg.gatherRand;
+      seed[count]  = Math.random();
+      alpha[count] = 0.88 + Math.random() * 0.12;
+      count++;
+    }
+  }
+
+  if (count === 0) { toast('没有生成任何粒子，试试调低「扣背景」'); return; }
+
+  /* —— 物理状态：从球壳上飞入 —— */
+  const pos = new Float32Array(count * 3);
+  const vel = new Float32Array(count * 3);
+  const stiff = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const i3 = i * 3;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const rad = cfg.flyFrom + Math.random() * Math.max(0.1, cfg.flyTo - cfg.flyFrom);
+    pos[i3]     = Math.sin(phi) * Math.cos(theta) * rad;
+    pos[i3 + 1] = Math.sin(phi) * Math.sin(theta) * rad;
+    pos[i3 + 2] = Math.cos(phi) * rad * 0.75;
+    /* 一点点切向初速，飞入时带螺旋感 */
+    vel[i3]     = -Math.sin(theta) * 0.55;
+    vel[i3 + 1] =  Math.cos(theta) * 0.55;
+    stiff[i]    = cfg.spring + Math.random() * cfg.springRand;
+  }
+
+  /* —— 建几何体 —— */
+  disposeWorld();
+
+  const geo = new THREE.BufferGeometry();
+  const posAttr = new THREE.BufferAttribute(pos, 3);
+  posAttr.setUsage(THREE.DynamicDrawUsage);
+
+  geo.setAttribute('position', posAttr);
+  geo.setAttribute('aColor', new THREE.BufferAttribute(color, 3));
+  geo.setAttribute('aSize',  new THREE.BufferAttribute(size, 1));
+  geo.setAttribute('aDelay', new THREE.BufferAttribute(delay, 1));
+  geo.setAttribute('aSeed',  new THREE.BufferAttribute(seed, 1));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+
+  const pts = new THREE.Points(geo, particleMaterial);
+  pts.frustumCulled = false;     // 粒子一直在动，别让包围球把它剪掉
+  scene.add(pts);
+
+  world.points = pts;
+  world.geo = geo;
+  world.posAttr = posAttr;
+  world.count = count;
+  world.pos = pos;
+  world.vel = vel;
+  world.home = home;
+  world.stiff = stiff;
+  world.seeds = seed;
+  world.delay = delay;
+
+  buildStart = performance.now();
+  hasBuilt = true;
+
+  if (!keepView) applyFit();
+  applyPixelScale();
+  updateGlow();
+
+  document.getElementById('title').classList.add('show');
+  document.getElementById('seal').classList.add('show');
+  document.getElementById('tip').classList.add('gone');
+  if (!hintHidden) document.getElementById('hint').classList.add('show');
+}
+
+function disposeWorld() {
+  if (!world.points) return;
+  scene.remove(world.points);
+  world.geo.dispose();
+  world.points = null;
+  world.geo = null;
+  world.posAttr = null;
+  world.count = 0;
+}
+
+/* ============================================================
+   7. 星点背景
+   ============================================================ */
+function buildStars() {
+  const COUNT = Math.round(cfg.stars * (SMALL ? 0.5 : 1));
+  const pos = new Float32Array(COUNT * 3);
+  const col = new Float32Array(COUNT * 3);
+  const size = new Float32Array(COUNT);
+  const delay = new Float32Array(COUNT);
+  const seed = new Float32Array(COUNT);
+  const alpha = new Float32Array(COUNT);
+
+  for (let i = 0; i < COUNT; i++) {
+    const i3 = i * 3;
+    const rad = 9 + Math.random() * 12;
+    const th = Math.random() * Math.PI * 2;
+    const ph = Math.acos(2 * Math.random() - 1);
+    pos[i3]     = Math.sin(ph) * Math.cos(th) * rad;
+    pos[i3 + 1] = Math.sin(ph) * Math.sin(th) * rad;
+    pos[i3 + 2] = Math.cos(ph) * rad * 0.6;
+
+    const t = 0.55 + Math.random() * 0.45;
+    col[i3]     = 1.00 * t;
+    col[i3 + 1] = 0.86 * t;
+    col[i3 + 2] = 0.62 * t;
+
+    size[i]  = 0.006 + Math.random() * 0.014;
+    delay[i] = 0;
+    seed[i]  = Math.random();
+    alpha[i] = 0.25 + Math.random() * 0.55;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('aSize',  new THREE.BufferAttribute(size, 1));
+  geo.setAttribute('aDelay', new THREE.BufferAttribute(delay, 1));
+  geo.setAttribute('aSeed',  new THREE.BufferAttribute(seed, 1));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+
+  starPoints = new THREE.Points(geo, starMaterial);
+  starPoints.frustumCulled = false;
+  scene.add(starPoints);
+}
+
+/* ============================================================
+   8. 相机自适应
+   ============================================================ */
+function fitDistance() {
+  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+  const margin = cfg.fitMargin;
+  const dH = (fitH * 0.5 * margin) / tan;
+  const dW = (fitW * 0.5 * margin) / (tan * Math.max(camera.aspect, 0.2));
+  return Math.max(dH, dW);
+}
+
+function applyFit() {
+  const dist = fitDistance();
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize().multiplyScalar(dist);
+  camera.position.copy(controls.target).add(dir);
+  controls.update();
+}
+
+function applyPixelScale() {
+  const hPx = renderer.domElement.height;
+  const s = (0.5 * hPx) / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+  if (particleMaterial) particleMaterial.uniforms.uPixelScale.value = s;
+  if (starMaterial) starMaterial.uniforms.uPixelScale.value = s;
+}
+
+function updateGlow() {
+  const g = window.__glowSprite;
+  if (!g) return;
+  const s = Math.max(fitW, fitH) * 5.5;
+  g.scale.set(s, s, 1);
+  g.position.set(0, 0, -6);
+}
+
+/* ============================================================
+   9. 指针交互
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const planeZ0 = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const cursor = new THREE.Vector3(9999, 9999, 9999);
+const hitPoint = new THREE.Vector3();
+let cursorOn = false;
+
+const el = renderer.domElement;
+
+el.addEventListener('pointermove', (e) => {
+  ndc.x = (e.clientX / innerWidth) * 2 - 1;
+  ndc.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  if (raycaster.ray.intersectPlane(planeZ0, hitPoint)) {
+    cursor.copy(hitPoint);
+    cursorOn = true;
+  }
+});
+el.addEventListener('pointerleave', () => {
+  cursorOn = false;
+  cursor.set(9999, 9999, 9999);
+});
+el.addEventListener('dblclick', () => document.getElementById('file').click());
+
+/* ============================================================
+   10. 动画主循环
+   ============================================================ */
+const REPEL_R = cfg.repelRadius;
+const REPEL_R2 = REPEL_R * REPEL_R;
+const REPEL_F = cfg.repelForce;
+const DAMPING = cfg.damping;
+
+let prevTime = performance.now();
+const START_TIME = performance.now();
+
+function tick(now) {
+  requestAnimationFrame(tick);
+
+  const rawDt = (now - prevTime) / 1000;
+  prevTime = now;
+  const dt = Math.min(0.05, Math.max(0.001, rawDt));
+  const elapsed = Math.max(0, (now - buildStart) / 1000);   // 当前照片的动画时间
+  const clock = (now - START_TIME) / 1000;                  // 全局时间（星点用）
+
+  particleMaterial.uniforms.uTime.value = elapsed;
+  particleMaterial.uniforms.uSize.value = cfg.size;
+  starMaterial.uniforms.uTime.value = clock;
+  if (starPoints) starPoints.rotation.y = clock * 0.012;
+
+  const w = world;
+  if (w.points && w.count) {
+    const arr = w.posAttr.array;
+    const vel = w.vel, home = w.home, stiff = w.stiff, seeds = w.seeds, dly = w.delay;
+    const damp = Math.exp(-DAMPING * dt);
+    const amp = cfg.drift;
+    const active = cursorOn;
+    const cx = cursor.x, cy = cursor.y, cz = cursor.z;
+
+    for (let i = 0; i < w.count; i++) {
+      /* 还没到自己出场时间：停在球壳上等着 */
+      if (elapsed < dly[i]) continue;
+
+      const i3 = i * 3;
+
+      let px = arr[i3], py = arr[i3 + 1], pz = arr[i3 + 2];
+      let vx = vel[i3], vy = vel[i3 + 1], vz = vel[i3 + 2];
+
+      /* 目标点：home + 极轻的呼吸漂移 */
+      const wave = Math.sin(elapsed * 0.95 + seeds[i] * 6.2831853);
+      const tx = home[i3]     + wave * amp;
+      const ty = home[i3 + 1] + wave * amp * 0.85;
+      const tz = home[i3 + 2] + wave * amp * 3.2;
+
+      const k = stiff[i];
+      vx += (tx - px) * k * dt;
+      vy += (ty - py) * k * dt;
+      vz += (tz - pz) * k * dt;
+
+      vx *= damp; vy *= damp; vz *= damp;
+
+      if (active) {
+        const dx = px - cx, dy = py - cy, dz = pz - cz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < REPEL_R2) {
+          const d = Math.sqrt(d2) + 0.0001;
+          const f = (1 - d / REPEL_R);
+          const imp = f * f * REPEL_F * dt;
+          vx += (dx / d) * imp;
+          vy += (dy / d) * imp;
+          vz += (dz / d) * imp;
+        }
+      }
+
+      px += vx * dt;
+      py += vy * dt;
+      pz += vz * dt;
+
+      arr[i3] = px;     arr[i3 + 1] = py;     arr[i3 + 2] = pz;
+      vel[i3] = vx;     vel[i3 + 1] = vy;     vel[i3 + 2] = vz;
+    }
+    w.posAttr.needsUpdate = true;
+  }
+
+  controls.update();
+  composer.render();
+}
+
+/* ============================================================
+   11. 窗口 / 输入 / UI
+   ============================================================ */
+const tipEl = document.getElementById('tip');
+const titleEl = document.getElementById('title');
+const fileEl = document.getElementById('file');
+const loadingEl = document.getElementById('loading');
+titleEl.textContent = cfg.title;
+
+function handleFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    lastImage = img;
+    buildFromImage(img, false);
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
+}
+
+fileEl.addEventListener('change', (e) => {
+  handleFile(e.target.files && e.target.files[0]);
+  e.target.value = '';
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+    handleFile(e.dataTransfer.files[0]);
+  }
+});
+tipEl.addEventListener('click', () => fileEl.click());
+
+/* —— 设置面板 —— */
+let rebuildTimer = 0;
+let toastTimer = 0;
+
+function toast(msg) {
+  loadingEl.textContent = msg;
+  loadingEl.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    loadingEl.classList.remove('on');
+    setTimeout(() => { loadingEl.textContent = '研墨铺陈…'; }, 420);
+  }, 2200);
+}
+
+function scheduleRebuild() {
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => {
+    if (!lastImage) return;
+    rebuildNow();
+  }, 240);
+}
+function rebuildNow() {
+  loadingEl.classList.add('on');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try { buildFromImage(lastImage, true); }
+    finally { loadingEl.classList.remove('on'); }
+  }));
+}
+
+const panelEl = document.getElementById('panel');
+const cDetail = document.getElementById('cDetail');
+const cBg = document.getElementById('cBg');
+const cSize = document.getElementById('cSize');
+const cBloom = document.getElementById('cBloom');
+const cRotate = document.getElementById('cRotate');
+
+document.getElementById('gear').addEventListener('click', () => panelEl.classList.toggle('hidden'));
+document.getElementById('btnPick').addEventListener('click', () => fileEl.click());
+
+cDetail.value = cfg.detail;
+cBg.value = Math.round(cfg.bgCut * 100);
+cSize.value = Math.round(cfg.size * 100);
+cBloom.value = Math.round(cfg.bloom * 100);
+cRotate.checked = cfg.autoRotate;
+
+cDetail.addEventListener('input', () => { cfg.detail = +cDetail.value; scheduleRebuild(); });
+cBg.addEventListener('input',     () => { cfg.bgCut = +cBg.value / 100;   scheduleRebuild(); });
+cSize.addEventListener('input',    () => { cfg.size = +cSize.value / 100; });
+cBloom.addEventListener('input',   () => { cfg.bloom = +cBloom.value / 100; bloomPass.strength = cfg.bloom; });
+cRotate.addEventListener('change', () => { cfg.autoRotate = cRotate.checked; controls.autoRotate = cfg.autoRotate; });
+
+/* —— 尺寸变化 —— */
+function onResize() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+
+  renderer.setPixelRatio(PIXEL_RATIO);
+  renderer.setSize(innerWidth, innerHeight);
+  if (typeof composer.setPixelRatio === 'function') composer.setPixelRatio(PIXEL_RATIO);
+  composer.setSize(innerWidth, innerHeight);
+
+  /* 背景贴图按新比例重画 */
+  const oldBg = scene.background;
+  scene.background = makeInkBackdrop();
+  if (oldBg && oldBg.dispose) oldBg.dispose();
+
+  applyPixelScale();
+  if (hasBuilt) applyFit();
+}
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', () => setTimeout(onResize, 250));
+
+/* 第一次操作 5 秒后淡出操作提示 */
+let hintHidden = false;
+function hideHint() {
+  if (hintHidden) return;
+  hintHidden = true;
+  setTimeout(() => {
+    document.getElementById('hint').classList.remove('show');
+  }, 5000);
+}
+window.addEventListener('pointerdown', hideHint, { once: true });
+
+/* ============================================================
+   12. 启动
+   ============================================================ */
+particleMaterial = makeParticleMaterial();
+particleMaterial.uniforms.uSize.value = cfg.size;
+starMaterial = makeParticleMaterial();
+
+buildStars();
+applyPixelScale();
+updateGlow();
+
+/* 方便调试：window.__loadImageURL('https://.../a.jpg') */
+window.__loadImageURL = (url) => {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => { lastImage = img; buildFromImage(img, false); };
+  img.src = url;
+};
+
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
